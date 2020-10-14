@@ -180,13 +180,10 @@ func (c *MyCollector) Collect(ch chan<- prometheus.Metric) {
     value,
   )
 }
-func mikestest2() (float64) {
-	return rand.Float64()+1
-}
 
 func NewMyCollector() *MyCollector {
   return &MyCollector{
-    counterDesc: prometheus.NewDesc("my_counter_total", "Help string", nil, nil),
+    counterDesc: prometheus.NewDesc("free_mem_mb", "Free Mem (MB)", nil, nil),
   }
 }
 
@@ -276,7 +273,7 @@ func mikestest() (float64) {
 func showStats2(output io.Writer, client *ssh.Client) (float64) {
 	stats := Stats{}
 	getAllStats(client, &stats)
-	return float64(stats.CPU.User)
+	return float64(stats.MemFree)
 }
 
 func showStats(output io.Writer, client *ssh.Client) {
