@@ -273,7 +273,7 @@ func mikestest() (float64) {
 func showStats2(output io.Writer, client *ssh.Client) (float64) {
 	stats := Stats{}
 	getAllStats(client, &stats)
-	return float64(stats.MemFree)
+	return float64((stats.MemFree/1000)/1000)
 }
 
 func showStats(output io.Writer, client *ssh.Client) {
