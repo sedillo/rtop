@@ -40,6 +40,11 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"math/rand"
+        "github.com/prometheus/client_golang/prometheus"
+        "net/http"
+        "github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const VERSION = "1.0"
@@ -159,21 +164,53 @@ func parseCmdLine() (host string, port int, user, key string, interval time.Dura
 
 //----------------------------------------------------------------------------
 
-func main() {
+type MyCollector struct {
+  counterDesc *prometheus.Desc
+}
 
+func (c *MyCollector) Describe(ch chan<- *prometheus.Desc) {
+  ch <- c.counterDesc
+}
+
+func (c *MyCollector) Collect(ch chan<- prometheus.Metric) {
+  value := mikestest()
+  ch <- prometheus.MustNewConstMetric(
+    c.counterDesc,
+    prometheus.CounterValue,
+    value,
+  )
+}
+func mikestest2() (float64) {
+	return rand.Float64()+1
+}
+
+func NewMyCollector() *MyCollector {
+  return &MyCollector{
+    counterDesc: prometheus.NewDesc("my_counter_total", "Help string", nil, nil),
+  }
+}
+
+func main() {
+        prometheus.MustRegister(NewMyCollector())
+        http.Handle("/metrics", promhttp.Handler())
+        log.Printf("Beginning to serve on port :8090")
+        log.Fatal(http.ListenAndServe(":8090", nil))
+}
+
+func mikestest() (float64) {
 	log.SetPrefix("rtop: ")
 	log.SetFlags(0)
 
 	// get params from command line
 	host, port, username, key, interval := parseCmdLine()
-	// log.Printf("cmdline: %s %d %s %s", host, port, username, key)
+	log.Printf("cmdline: %s %d %s %s", host, port, username, key)
 
 	// get current user
 	var err error
 	currentUser, err = user.Current()
 	if err != nil {
 		log.Print(err)
-		return
+		return float64(2.0)
 	}
 
 	// fill from ~/.ssh/config if possible
@@ -193,7 +230,7 @@ func main() {
 			if len(skey) > 0 && len(key) == 0 {
 				key = skey
 			}
-			// log.Printf("after sshconfig: %s %d %s %s", host, port, username, key)
+			log.Printf("after sshconfig: %s %d %s %s", host, port, username, key)
 		}
 	}
 
@@ -213,28 +250,33 @@ func main() {
 	if interval == 0 {
 		interval = DEFAULT_REFRESH * time.Second
 	}
-	// log.Printf("after defaults: %s %d %s %s", host, port, username, key)
-	// log.Printf("interval: %v", interval)
+	log.Printf("after defaults: %s %d %s %s", host, port, username, key)
+	log.Printf("interval: %v", interval)
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	client := sshConnect(username, addr, key)
 
 	output := getOutput()
 	// the loop
-	showStats(output, client)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	timer := time.Tick(interval)
-	done := false
-	for !done {
-		select {
-		case <-sig:
-			done = true
-			fmt.Println()
-		case <-timer:
-			showStats(output, client)
-		}
-	}
+	//timer := time.Tick(interval)
+	//done := false
+	//for !done {
+		//select {
+		//case <-sig:
+			//done = true
+			//fmt.Println()
+		//case <-timer:
+		return showStats2(output, client)
+		//}
+	//}
+}
+
+func showStats2(output io.Writer, client *ssh.Client) (float64) {
+	stats := Stats{}
+	getAllStats(client, &stats)
+	return float64(stats.CPU.User)
 }
 
 func showStats(output io.Writer, client *ssh.Client) {
