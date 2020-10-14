@@ -41,7 +41,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"math/rand"
         "github.com/prometheus/client_golang/prometheus"
         "net/http"
         "github.com/prometheus/client_golang/prometheus/promhttp"
