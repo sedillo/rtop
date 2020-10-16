@@ -163,22 +163,32 @@ func parseCmdLine() (host string, port int, user, key string, interval time.Dura
 
 //----------------------------------------------------------------------------
 
+type ClusterManager struct {
+	Zone string
+}
+
+func (c *ClusterManager) ReallyExpensiveAssessmentOfTheSystemState() (myStats Stats) {
+	myStats = mikestest()
+	return
+}
+
 var (
-  tempDesc0 = prometheus.NewDesc(
-    "a_cpu_idle", "CPU Usage (Idle)", nil, nil,
-  )
   tempDesc1 = prometheus.NewDesc(
-    "a_cpu_user", "CPU Usage (User)", nil, nil,
+    "a_test_1",
+    "A Test 1",
+    nil,
+    nil,
   )
   tempDesc2 = prometheus.NewDesc(
-    "a_mem_free", "Memory (Free)", nil, nil,
-  )
-  tempDesc3 = prometheus.NewDesc(
-    "a_mem_used", "Memory (Used)", nil, nil,
+    "a_test_2",
+    "A Test 2",
+    nil,
+    nil,
   )
 )
 
 type ClusterManagerCollector struct {
+  ClusterManager *ClusterManager
 }
 
 func (cc ClusterManagerCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -186,42 +196,47 @@ func (cc ClusterManagerCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (cc ClusterManagerCollector) Collect(ch chan<- prometheus.Metric) {
-  mystats := getstats()
+  mystats := mikestest()
 
-  ch <- prometheus.MustNewConstMetric(
-    tempDesc0,
-    prometheus.GaugeValue,
-    float64(mystats.CPU.Idle),
-  )
   ch <- prometheus.MustNewConstMetric(
     tempDesc1,
     prometheus.GaugeValue,
     float64(mystats.CPU.User),
   )
+
   ch <- prometheus.MustNewConstMetric(
     tempDesc2,
     prometheus.GaugeValue,
     float64(mystats.MemFree),
   )
+}
 
-  used := mystats.MemTotal - mystats.MemFree - mystats.MemBuffers - mystats.MemCached
-  ch <- prometheus.MustNewConstMetric(
-    tempDesc3,
-    prometheus.GaugeValue,
-    float64(used),
-  )
+func NewClusterManager(zone string, reg prometheus.Registerer) *ClusterManager {
+  c := &ClusterManager {
+    Zone: zone,
+  }
+  cc := ClusterManagerCollector{ClusterManager: c}
+  prometheus.WrapRegistererWith(prometheus.Labels{"zone": zone}, reg).MustRegister(cc)
+  return c
 }
 
 func main() {
-	cc := ClusterManagerCollector{}
-	prometheus.MustRegister(cc)
+	reg := prometheus.NewPedanticRegistry()
 
-        http.Handle("/metrics", promhttp.Handler())
+	NewClusterManager("db", reg)
+	NewClusterManager("ca", reg)
+
+	reg.MustRegister(
+		prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
+		prometheus.NewGoCollector(),
+	)
+
+        http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
         log.Printf("Beginning to serve on port :8090")
         log.Fatal(http.ListenAndServe(":8090", nil))
 }
 
-func getstats() (Stats) {
+func mikestest() (Stats) {
 	log.SetPrefix("rtop: ")
 	log.SetFlags(0)
 
