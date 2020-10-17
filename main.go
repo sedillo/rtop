@@ -52,20 +52,28 @@ const VERSION = "1.0"
 var currentUser *user.User
 
 //----------------------------------------------------------------------------
-var (
-  tempDesc0 = prometheus.NewDesc(
-    "a_cpu_idle", "CPU Usage (Idle)", nil, nil,
-  )
-  tempDesc1 = prometheus.NewDesc(
-    "a_cpu_user", "CPU Usage (User)", nil, nil,
-  )
-  tempDesc2 = prometheus.NewDesc(
-    "a_mem_free", "Memory (Free)", nil, nil,
-  )
-  tempDesc3 = prometheus.NewDesc(
-    "a_mem_used", "Memory (Used)", nil, nil,
-  )
-)
+
+func CreatePrometheusDescs(Ip string) (
+		*prometheus.Desc, *prometheus.Desc,
+		*prometheus.Desc, *prometheus.Desc) {
+
+	noDotIp := strings.ReplaceAll(Ip, ".", "_")
+	preStr := "a_"+noDotIp+"_"
+
+	tempDesc0 := prometheus.NewDesc(
+		preStr + "cpu_idle", "CPU Usage (Idle)", nil, nil,
+	)
+	tempDesc1 := prometheus.NewDesc(
+		preStr + "a_cpu_user", "CPU Usage (User)", nil, nil,
+	)
+	tempDesc2 := prometheus.NewDesc(
+		preStr + "a_mem_free", "Memory (Free)", nil, nil,
+	)
+	tempDesc3 := prometheus.NewDesc(
+		preStr + "a_mem_used", "Memory (Used)", nil, nil,
+	)
+	return tempDesc0, tempDesc1, tempDesc2, tempDesc3
+}
 
 type ClusterManagerCollector struct {
 }
@@ -80,31 +88,17 @@ func (cc ClusterManagerCollector) Collect(ch chan<- prometheus.Metric) {
 
 	for _, oneTargetStats := range allTargetStats {
 		mystats := oneTargetStats.theStats
-		//log.Printf("%d %d %d", mystats.CPU.User, mystats.CPU.Idle, mystats.MemFree)
+		log.Print(oneTargetStats.theTarget.Ip)
+		tempDesc0, tempDesc1, tempDesc2, tempDesc3 := CreatePrometheusDescs(oneTargetStats.theTarget.Ip)
 
-    ch <- prometheus.MustNewConstMetric(
-      tempDesc0,
-      prometheus.GaugeValue,
-      float64(mystats.CPU.Idle),
-    )
-    ch <- prometheus.MustNewConstMetric(
-      tempDesc1,
-      prometheus.GaugeValue,
-      float64(mystats.CPU.User),
-    )
-    ch <- prometheus.MustNewConstMetric(
-      tempDesc2,
-      prometheus.GaugeValue,
-      float64(mystats.MemFree),
-    )
+		ch <- prometheus.MustNewConstMetric( tempDesc0, prometheus.GaugeValue, float64(mystats.CPU.Idle),)
+		ch <- prometheus.MustNewConstMetric( tempDesc1, prometheus.GaugeValue, float64(mystats.CPU.User),)
+		ch <- prometheus.MustNewConstMetric( tempDesc2, prometheus.GaugeValue, float64(mystats.MemFree),)
 
-    used := mystats.MemTotal - mystats.MemFree - mystats.MemBuffers - mystats.MemCached
-    ch <- prometheus.MustNewConstMetric(
-      tempDesc3,
-      prometheus.GaugeValue,
-      float64(used),
-    )
-  }
+		used := mystats.MemTotal - mystats.MemFree - mystats.MemBuffers - mystats.MemCached
+		ch <- prometheus.MustNewConstMetric( tempDesc3, prometheus.GaugeValue, float64(used),)
+	}
+
 	duration := time.Since(start)
 	log.Print(duration)
 }
