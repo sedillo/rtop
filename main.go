@@ -31,6 +31,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 	//"os/signal"
 	//"syscall"
 	"os/user"
@@ -74,7 +75,9 @@ func (cc ClusterManagerCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (cc ClusterManagerCollector) Collect(ch chan<- prometheus.Metric) {
+	start := time.Now()
 	allTargetStats := getstats()
+
 	for _, oneTargetStats := range allTargetStats {
 		mystats := oneTargetStats.theStats
 		//log.Printf("%d %d %d", mystats.CPU.User, mystats.CPU.Idle, mystats.MemFree)
@@ -102,6 +105,8 @@ func (cc ClusterManagerCollector) Collect(ch chan<- prometheus.Metric) {
       float64(used),
     )
   }
+	duration := time.Since(start)
+	log.Print(duration)
 }
 
 type IpNodeStats struct {
@@ -115,7 +120,7 @@ func makeRequest(ch chan<- IpNodeStats, ip string, wg *sync.WaitGroup) {
 }
 
 type TargetStats struct {
-	theStats   Stats
+	theStats  *Stats
 	theTarget *Target
 }
 
@@ -123,6 +128,7 @@ type Target struct {
 	User    string
 	Ip      string
 	Port    int
+	lastCpu cpuRaw
 }
 
 var AllTargets []Target
@@ -142,7 +148,7 @@ func ParseFile() {
 		//log.Printf(words[0], words[1], words[2])
 
 		if i, err := strconv.Atoi(words[2]); err == nil {
-			t := Target{words[0], words[1], i}
+			t := Target{words[0], words[1], i, cpuRaw{}}
 			AllTargets = append(AllTargets, t)
 		}
 	}
@@ -180,7 +186,7 @@ func getstats() ([]TargetStats) {
 
 	var fullStats []TargetStats
 
-	for _, onetarget := range AllTargets {
+	for counter, onetarget := range AllTargets {
 		host := onetarget.Ip
 		port := onetarget.Port
 		username := onetarget.User
@@ -194,9 +200,12 @@ func getstats() ([]TargetStats) {
 		//signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 
 		stats := Stats{}
-		getAllStats(client, &stats)
-		log.Printf("%d %d %d", stats.CPU.User, stats.CPU.Idle, stats.MemFree)
-		ts := TargetStats{stats, &onetarget}
+		//log.Printf("before %d", onetarget.lastCpu.Total)
+		AllTargets[counter].lastCpu = getAllStats(client, &stats, onetarget.lastCpu)
+		//log.Printf("after %d", AllTargets[counter].lastCpu.Total)
+		log.Printf("%.2f %.2f %d", stats.CPU.User, stats.CPU.Idle, stats.MemFree)
+
+		ts := TargetStats{&stats, &onetarget}
 		fullStats = append(fullStats, ts)
 	}
 
@@ -206,7 +215,7 @@ func getstats() ([]TargetStats) {
 
 func showStats(output io.Writer, client *ssh.Client) {
 	stats := Stats{}
-	getAllStats(client, &stats)
+	//getAllStats(client, &stats)
 	clearConsole()
 	used := stats.MemTotal - stats.MemFree - stats.MemBuffers - stats.MemCached
 	fmt.Fprintf(output,

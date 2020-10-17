@@ -27,6 +27,7 @@ package main
 
 import (
 	"bufio"
+	"log"
 	"golang.org/x/crypto/ssh"
 	"strconv"
 	"strings"
@@ -90,7 +91,8 @@ type Stats struct {
 	CPU          CPUInfo // or []CPUInfo to get all the cpu-core's stats?
 }
 
-func getAllStats(client *ssh.Client, stats *Stats) {
+func getAllStats(client *ssh.Client, stats *Stats, preCPU cpuRaw) (cpuRaw) {
+        //log.Printf("Total preCPU %d", preCPU.Total)
 	getUptime(client, stats)
 	getHostname(client, stats)
 	getLoad(client, stats)
@@ -98,7 +100,9 @@ func getAllStats(client *ssh.Client, stats *Stats) {
 	getFSInfo(client, stats)
 	getInterfaces(client, stats)
 	getInterfaceInfo(client, stats)
-	getCPU(client, stats)
+	updatedCpuRaw := getCPU(client, stats, preCPU)
+        //log.Printf("Total updatedCpuRaw %d", updatedCpuRaw.Total)
+	return updatedCpuRaw
 }
 
 func getUptime(client *ssh.Client, stats *Stats) (err error) {
@@ -304,6 +308,7 @@ func getInterfaceInfo(client *ssh.Client, stats *Stats) (err error) {
 }
 
 func parseCPUFields(fields []string, stat *cpuRaw) {
+	//log.Print(fields)
 	numFields := len(fields)
 	for i := 1; i < numFields; i++ {
 		val, err := strconv.ParseUint(fields[i], 10, 64)
@@ -335,13 +340,11 @@ func parseCPUFields(fields []string, stat *cpuRaw) {
 	}
 }
 
-// the CPU stats that were fetched last time round
-var preCPU cpuRaw
-
-func getCPU(client *ssh.Client, stats *Stats) (err error) {
+func getCPU(client *ssh.Client, stats *Stats, preCPU cpuRaw) (cpuRaw) {
 	lines, err := runCommand(client, "/bin/cat /proc/stat")
 	if err != nil {
-		return
+		c := cpuRaw {}
+		return c
 	}
 
 	var (
@@ -353,13 +356,16 @@ func getCPU(client *ssh.Client, stats *Stats) (err error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Fields(line)
-		if len(fields) > 0 && fields[0] == "cpu" { // changing here if want to get every cpu-core's stats
+		// changing here if want to get every cpu-core's stats
+		if len(fields) > 0 && fields[0] == "cpu" {
 			parseCPUFields(fields, &nowCPU)
 			break
 		}
 	}
+	//log.Printf("Total nowCPU %i", nowCPU.Total)
 	if preCPU.Total == 0 { // having no pre raw cpu data
-		goto END
+		log.Print("No Pre CPU Info")
+		return nowCPU
 	}
 
 	total = float32(nowCPU.Total - preCPU.Total)
@@ -371,7 +377,6 @@ func getCPU(client *ssh.Client, stats *Stats) (err error) {
 	stats.CPU.Irq = float32(nowCPU.Irq-preCPU.Irq) / total * 100
 	stats.CPU.SoftIrq = float32(nowCPU.SoftIrq-preCPU.SoftIrq) / total * 100
 	stats.CPU.Guest = float32(nowCPU.Guest-preCPU.Guest) / total * 100
-END:
-	preCPU = nowCPU
-	return
+
+	return nowCPU
 }
