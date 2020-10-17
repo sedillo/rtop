@@ -26,18 +26,19 @@ THE SOFTWARE.
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"os/signal"
+	//"os/signal"
+	//"syscall"
 	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
+	"sync"
 
 	"golang.org/x/crypto/ssh"
 
@@ -47,122 +48,9 @@ import (
 )
 
 const VERSION = "1.0"
-const DEFAULT_REFRESH = 5 // default refresh interval in seconds
-
 var currentUser *user.User
 
 //----------------------------------------------------------------------------
-// Command-line processing
-
-func usage(code int) {
-	fmt.Printf(
-		`rtop %s - (c) 2015 RapidLoop - MIT Licensed - http://rtop-monitor.org
-rtop monitors server statistics over an ssh connection
-
-Usage: rtop [-i private-key-file] [user@]host[:port] [interval]
-
-	-i private-key-file
-		PEM-encoded private key file to use (default: ~/.ssh/id_rsa if present)
-	[user@]host[:port]
-		the SSH server to connect to, with optional username and port
-	interval
-		refresh interval in seconds (default: %d)
-
-`, VERSION, DEFAULT_REFRESH)
-	os.Exit(code)
-}
-
-func shift(q []string) (ok bool, val string, qnew []string) {
-	if len(q) > 0 {
-		ok = true
-		val = q[0]
-		qnew = q[1:]
-	}
-	return
-}
-
-func parseCmdLine() (host string, port int, user, key string, interval time.Duration) {
-	ok, arg, args := shift(os.Args)
-	var argKey, argHost, argInt string
-	for ok {
-		ok, arg, args = shift(args)
-		if !ok {
-			break
-		}
-		if arg == "-h" || arg == "--help" || arg == "--version" {
-			usage(0)
-		}
-		if arg == "-i" {
-			ok, argKey, args = shift(args)
-			if !ok {
-				usage(1)
-			}
-		} else if len(argHost) == 0 {
-			argHost = arg
-		} else if len(argInt) == 0 {
-			argInt = arg
-		} else {
-			usage(1)
-		}
-	}
-	if len(argHost) == 0 || argHost[0] == '-' {
-		usage(1)
-	}
-
-	// key
-	if len(argKey) != 0 {
-		key = argKey
-	} // else key remains ""
-
-	// user, addr
-	var addr string
-	if i := strings.Index(argHost, "@"); i != -1 {
-		user = argHost[:i]
-		if i+1 >= len(argHost) {
-			usage(1)
-		}
-		addr = argHost[i+1:]
-	} else {
-		// user remains ""
-		addr = argHost
-	}
-
-	// addr -> host, port
-	if p := strings.Split(addr, ":"); len(p) == 2 {
-		host = p[0]
-		var err error
-		if port, err = strconv.Atoi(p[1]); err != nil {
-			log.Printf("bad port: %v", err)
-			usage(1)
-		}
-		if port <= 0 || port >= 65536 {
-			log.Printf("bad port: %d", port)
-			usage(1)
-		}
-	} else {
-		host = addr
-		// port remains 0
-	}
-
-	// interval
-	if len(argInt) > 0 {
-		i, err := strconv.ParseUint(argInt, 10, 64)
-		if err != nil {
-			log.Printf("bad interval: %v", err)
-			usage(1)
-		}
-		if i <= 0 {
-			log.Printf("bad interval: %d", i)
-			usage(1)
-		}
-		interval = time.Duration(i) * time.Second
-	} // else interval remains 0
-
-	return
-}
-
-//----------------------------------------------------------------------------
-
 var (
   tempDesc0 = prometheus.NewDesc(
     "a_cpu_idle", "CPU Usage (Idle)", nil, nil,
@@ -186,48 +74,93 @@ func (cc ClusterManagerCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (cc ClusterManagerCollector) Collect(ch chan<- prometheus.Metric) {
-  mystats := getstats()
+	allTargetStats := getstats()
+	for _, oneTargetStats := range allTargetStats {
+		mystats := oneTargetStats.theStats
+		//log.Printf("%d %d %d", mystats.CPU.User, mystats.CPU.Idle, mystats.MemFree)
 
-  ch <- prometheus.MustNewConstMetric(
-    tempDesc0,
-    prometheus.GaugeValue,
-    float64(mystats.CPU.Idle),
-  )
-  ch <- prometheus.MustNewConstMetric(
-    tempDesc1,
-    prometheus.GaugeValue,
-    float64(mystats.CPU.User),
-  )
-  ch <- prometheus.MustNewConstMetric(
-    tempDesc2,
-    prometheus.GaugeValue,
-    float64(mystats.MemFree),
-  )
+    ch <- prometheus.MustNewConstMetric(
+      tempDesc0,
+      prometheus.GaugeValue,
+      float64(mystats.CPU.Idle),
+    )
+    ch <- prometheus.MustNewConstMetric(
+      tempDesc1,
+      prometheus.GaugeValue,
+      float64(mystats.CPU.User),
+    )
+    ch <- prometheus.MustNewConstMetric(
+      tempDesc2,
+      prometheus.GaugeValue,
+      float64(mystats.MemFree),
+    )
 
-  used := mystats.MemTotal - mystats.MemFree - mystats.MemBuffers - mystats.MemCached
-  ch <- prometheus.MustNewConstMetric(
-    tempDesc3,
-    prometheus.GaugeValue,
-    float64(used),
-  )
+    used := mystats.MemTotal - mystats.MemFree - mystats.MemBuffers - mystats.MemCached
+    ch <- prometheus.MustNewConstMetric(
+      tempDesc3,
+      prometheus.GaugeValue,
+      float64(used),
+    )
+  }
+}
+
+type IpNodeStats struct {
+	Ip       string
+	daStats  Stats
+}
+
+func makeRequest(ch chan<- IpNodeStats, ip string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	getstats()
+}
+
+type TargetStats struct {
+	theStats   Stats
+	theTarget *Target
+}
+
+type Target struct {
+	User    string
+	Ip      string
+	Port    int
+}
+
+var AllTargets []Target
+
+func ParseFile() {
+	file, err := os.Open("./rtop-clients")
+	if err != nil {
+		log.Print(err)
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+
+	for scanner.Scan() {
+		//log.Printf(scanner.Text())
+		words := strings.Fields(scanner.Text())
+		//log.Printf(words[0], words[1], words[2])
+
+		if i, err := strconv.Atoi(words[2]); err == nil {
+			t := Target{words[0], words[1], i}
+			AllTargets = append(AllTargets, t)
+		}
+	}
+
+	file.Close()
 }
 
 func main() {
 	cc := ClusterManagerCollector{}
 	prometheus.MustRegister(cc)
+	ParseFile()
 
         http.Handle("/metrics", promhttp.Handler())
         log.Printf("Beginning to serve on port :8090")
         log.Fatal(http.ListenAndServe(":8090", nil))
 }
 
-func getstats() (Stats) {
-	log.SetPrefix("rtop: ")
-	log.SetFlags(0)
-
-	// get params from command line
-	host, port, username, key, interval := parseCmdLine()
-	log.Printf("cmdline: %s %d %s %s", host, port, username, key)
+func getstats() ([]TargetStats) {
 
 	// get current user
 	var err error
@@ -236,56 +169,38 @@ func getstats() (Stats) {
 		log.Print(err)
 	}
 
-	// fill from ~/.ssh/config if possible
-	sshConfig := filepath.Join(currentUser.HomeDir, ".ssh", "config")
-	if _, err := os.Stat(sshConfig); err == nil {
-		if parseSshConfig(sshConfig) {
-			shost, sport, suser, skey := getSshEntry(host)
-			if len(shost) > 0 {
-				host = shost
-			}
-			if sport != 0 && port == 0 {
-				port = sport
-			}
-			if len(suser) > 0 && len(username) == 0 {
-				username = suser
-			}
-			if len(skey) > 0 && len(key) == 0 {
-				key = skey
-			}
-			log.Printf("after sshconfig: %s %d %s %s", host, port, username, key)
-		}
+	idrsap := filepath.Join(currentUser.HomeDir, ".ssh", "id_rsa")
+	var key string
+	if _, err := os.Stat(idrsap); err == nil {
+		key = idrsap
+	}
+	if key == "" {
+		panic("no key found")
 	}
 
-	// fill in still-unknown ones with defaults
-	if port == 0 {
-		port = 22
-	}
-	if len(username) == 0 {
-		username = currentUser.Username
-	}
-	if len(key) == 0 {
-		idrsap := filepath.Join(currentUser.HomeDir, ".ssh", "id_rsa")
-		if _, err := os.Stat(idrsap); err == nil {
-			key = idrsap
-		}
-	}
-	if interval == 0 {
-		interval = DEFAULT_REFRESH * time.Second
-	}
-	log.Printf("after defaults: %s %d %s %s", host, port, username, key)
-	log.Printf("interval: %v", interval)
+	var fullStats []TargetStats
 
-	addr := fmt.Sprintf("%s:%d", host, port)
-	client := sshConnect(username, addr, key)
+	for _, onetarget := range AllTargets {
+		host := onetarget.Ip
+		port := onetarget.Port
+		username := onetarget.User
+		log.Printf("%s %d %s %s", host, port, username, key)
 
-	// the loop
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+		addr := fmt.Sprintf("%s:%d", host, port)
+		client := sshConnect(username, addr, key)
 
-	stats := Stats{}
-	getAllStats(client, &stats)
-	return stats
+		//shouldn't need this channel
+		//sig := make(chan os.Signal, 1)
+		//signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+
+		stats := Stats{}
+		getAllStats(client, &stats)
+		log.Printf("%d %d %d", stats.CPU.User, stats.CPU.Idle, stats.MemFree)
+		ts := TargetStats{stats, &onetarget}
+		fullStats = append(fullStats, ts)
+	}
+
+	return fullStats
 }
 
 
