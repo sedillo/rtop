@@ -30,14 +30,11 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/signal"
 	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -47,7 +44,6 @@ import (
 )
 
 const VERSION = "1.0"
-const DEFAULT_REFRESH = 5 // default refresh interval in seconds
 
 var currentUser *user.User
 
@@ -59,16 +55,14 @@ func usage(code int) {
 		`rtop %s - (c) 2015 RapidLoop - MIT Licensed - http://rtop-monitor.org
 rtop monitors server statistics over an ssh connection
 
-Usage: rtop [-i private-key-file] [user@]host[:port] [interval]
+Usage: rtop [-i private-key-file] [user@]host[:port] 
 
 	-i private-key-file
 		PEM-encoded private key file to use (default: ~/.ssh/id_rsa if present)
 	[user@]host[:port]
 		the SSH server to connect to, with optional username and port
-	interval
-		refresh interval in seconds (default: %d)
 
-`, VERSION, DEFAULT_REFRESH)
+`, VERSION)
 	os.Exit(code)
 }
 
@@ -81,7 +75,7 @@ func shift(q []string) (ok bool, val string, qnew []string) {
 	return
 }
 
-func parseCmdLine() (host string, port int, user, key string, interval time.Duration) {
+func parseCmdLine() (host string, port int, user, key string) {
 	ok, arg, args := shift(os.Args)
 	var argKey, argHost, argInt string
 	for ok {
@@ -143,20 +137,6 @@ func parseCmdLine() (host string, port int, user, key string, interval time.Dura
 		host = addr
 		// port remains 0
 	}
-
-	// interval
-	if len(argInt) > 0 {
-		i, err := strconv.ParseUint(argInt, 10, 64)
-		if err != nil {
-			log.Printf("bad interval: %v", err)
-			usage(1)
-		}
-		if i <= 0 {
-			log.Printf("bad interval: %d", i)
-			usage(1)
-		}
-		interval = time.Duration(i) * time.Second
-	} // else interval remains 0
 
 	return
 }
@@ -222,11 +202,9 @@ func main() {
 }
 
 func getstats() (Stats) {
-	log.SetPrefix("rtop: ")
-	log.SetFlags(0)
 
 	// get params from command line
-	host, port, username, key, interval := parseCmdLine()
+	host, port, username, key := parseCmdLine()
 	log.Printf("cmdline: %s %d %s %s", host, port, username, key)
 
 	// get current user
@@ -234,27 +212,6 @@ func getstats() (Stats) {
 	currentUser, err = user.Current()
 	if err != nil {
 		log.Print(err)
-	}
-
-	// fill from ~/.ssh/config if possible
-	sshConfig := filepath.Join(currentUser.HomeDir, ".ssh", "config")
-	if _, err := os.Stat(sshConfig); err == nil {
-		if parseSshConfig(sshConfig) {
-			shost, sport, suser, skey := getSshEntry(host)
-			if len(shost) > 0 {
-				host = shost
-			}
-			if sport != 0 && port == 0 {
-				port = sport
-			}
-			if len(suser) > 0 && len(username) == 0 {
-				username = suser
-			}
-			if len(skey) > 0 && len(key) == 0 {
-				key = skey
-			}
-			log.Printf("after sshconfig: %s %d %s %s", host, port, username, key)
-		}
 	}
 
 	// fill in still-unknown ones with defaults
@@ -270,18 +227,10 @@ func getstats() (Stats) {
 			key = idrsap
 		}
 	}
-	if interval == 0 {
-		interval = DEFAULT_REFRESH * time.Second
-	}
 	log.Printf("after defaults: %s %d %s %s", host, port, username, key)
-	log.Printf("interval: %v", interval)
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	client := sshConnect(username, addr, key)
-
-	// the loop
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 
 	stats := Stats{}
 	getAllStats(client, &stats)
